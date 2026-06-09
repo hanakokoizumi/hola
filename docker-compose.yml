@@ -1,0 +1,48 @@
+services:
+  hola:
+    build: .
+    image: hola:latest
+    container_name: hola
+    restart: unless-stopped
+    environment:
+      HOLA_CONFIG_PATH: /app/data/hola.yaml
+      HOLA_APP_DATA: /app/data
+      HOLA_CLOUDFLARED_DATA: /etc/cloudflared
+      HOLA_CADDY_ADMIN_URL: http://caddy:2019
+      HOLA_CADDY_CONFIG_DIR: /caddy-config
+      HOLA_HOST: 0.0.0.0
+      HOLA_PORT: 9333
+    ports:
+      - "9333:9333"
+    volumes:
+      - ./data/app:/app/data
+      - ./data/cloudflared:/etc/cloudflared
+      - ./data/caddy/config:/caddy-config
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - caddy
+
+  caddy:
+    image: caddy:2.8
+    container_name: hola-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./data/caddy/data:/data
+      - ./data/caddy/config:/config
+    command: ["caddy", "run", "--config", "/config/caddy.json"]
+
+  cloudflared:
+    build:
+      context: .
+      dockerfile: Dockerfile.cloudflared
+    image: hola-cloudflared:latest
+    container_name: hola-cloudflared
+    restart: unless-stopped
+    volumes:
+      - ./data/cloudflared:/etc/cloudflared
+    depends_on:
+      - hola
+      - caddy

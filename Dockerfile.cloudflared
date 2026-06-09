@@ -1,0 +1,8 @@
+FROM cloudflare/cloudflared:latest AS cloudflared
+
+FROM alpine:3.22
+RUN apk add --no-cache ca-certificates
+COPY --from=cloudflared /usr/local/bin/cloudflared /usr/local/bin/cloudflared
+COPY scripts/wait-cloudflared-tunnel.sh /usr/local/bin/wait-cloudflared-tunnel.sh
+RUN chmod +x /usr/local/bin/wait-cloudflared-tunnel.sh
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/wait-cloudflared-tunnel.sh"]

@@ -1,0 +1,27 @@
+export const emptyConfig = {
+  project: "Hola",
+  version: "0.1.0",
+  author: "Hanako",
+  github: "https://github.com/hanakokoizumi/hola",
+  homepage: "https://hanako.me",
+  admin: { username: "admin", password_hash: "" },
+  cloudflare: {
+    enabled: false,
+    tunnel_name: "",
+    tunnel_id: "",
+    credentials_file: "",
+    zone_id: "",
+    api_token: "",
+    proxy_enabled: false,
+    proxy_url: "",
+  },
+  adguard: { enabled: true, url: "", username: "", password: "" },
+  caddy: { admin_url: "http://caddy:2019", local_ip: "", acme_email: "", http01_enabled: true },
+  proxies: [],
+  status: {},
+  cloudflare_login: {
+    state: "unknown",
+    message: "",
+    login_running: false,
+  },
+};

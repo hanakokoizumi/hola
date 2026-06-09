@@ -1,0 +1,9 @@
+{
+  "name": "hola-workspace",
+  "private": true,
+  "packageManager": "pnpm@11.3.0",
+  "scripts": {
+    "build": "pnpm --dir frontend build",
+    "dev": "pnpm --dir frontend dev"
+  }
+}
