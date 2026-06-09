@@ -16,8 +16,10 @@ from .clients import (
     ExternalServiceError,
     create_cloudflared_tunnel,
     ensure_caddy_bootstrap,
+    get_cloudflare_zone,
     get_cloudflared_login_status,
     get_container_logs,
+    read_cloudflared_origin_cert,
     logout_cloudflared_login,
     restart_container,
     start_cloudflared_login,
@@ -84,6 +86,72 @@ def schedule_sync(background_tasks: BackgroundTasks) -> None:
     background_tasks.add_task(sync_manager.reconcile)
 
 
+def hostname_in_zone(hostname: str, zone_name: str) -> bool:
+    host = hostname.strip().lower().rstrip(".")
+    zone = zone_name.strip().lower().rstrip(".")
+    return bool(zone and (host == zone or host.endswith(f".{zone}")))
+
+
+def require_proxy_hostname_in_zone(config: HolaConfig, proxy: ProxyRule) -> None:
+    zone_name = config.cloudflare.zone_name
+    if not zone_name:
+        return
+    if not hostname_in_zone(proxy.hostname, zone_name):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Hostname must be within the selected Cloudflare Zone: {zone_name}",
+        )
+
+
+async def sync_cloudflare_zone_from_login(config: HolaConfig) -> bool:
+    try:
+        cert = read_cloudflared_origin_cert()
+    except ExternalServiceError:
+        return False
+    changed = False
+    for key in ["zone_id", "account_id", "api_token"]:
+        value = cert.get(key, "")
+        if value and getattr(config.cloudflare, key) != value:
+            setattr(config.cloudflare, key, value)
+            changed = True
+    if cert.get("zone_id") and cert.get("api_token"):
+        try:
+            zone = await get_cloudflare_zone(cert["zone_id"], cert["api_token"])
+        except ExternalServiceError:
+            zone = {}
+        for source_key, target_key in {
+            "zone_id": "zone_id",
+            "zone_name": "zone_name",
+            "account_id": "account_id",
+        }.items():
+            value = zone.get(source_key, "")
+            if value and getattr(config.cloudflare, target_key) != value:
+                setattr(config.cloudflare, target_key, value)
+                changed = True
+    return changed
+
+
+async def sync_cloudflare_zone_from_config(config: HolaConfig) -> bool:
+    cf = config.cloudflare
+    if not cf.zone_id or not cf.api_token:
+        return False
+    try:
+        zone = await get_cloudflare_zone(cf.zone_id, cf.api_token)
+    except ExternalServiceError:
+        return False
+    changed = False
+    for source_key, target_key in {
+        "zone_id": "zone_id",
+        "zone_name": "zone_name",
+        "account_id": "account_id",
+    }.items():
+        value = zone.get(source_key, "")
+        if value and getattr(cf, target_key) != value:
+            setattr(cf, target_key, value)
+            changed = True
+    return changed
+
+
 @app.get("/api/config")
 async def get_config() -> dict:
     return store.read(decrypt=False).public_dict()
@@ -95,6 +163,9 @@ async def put_config(payload: dict, background_tasks: BackgroundTasks) -> dict:
         config = store.update_from_public_payload(payload)
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    decrypted = store.read(decrypt=True)
+    if await sync_cloudflare_zone_from_config(decrypted):
+        config = store.write(decrypted)
     schedule_sync(background_tasks)
     return config.public_dict()
 
@@ -124,6 +195,9 @@ async def list_proxies() -> list[dict]:
 @app.post("/api/proxies")
 async def create_proxy(payload: ProxyRule, background_tasks: BackgroundTasks) -> dict:
     config = store.read(decrypt=True)
+    if not config.cloudflare.zone_name and await sync_cloudflare_zone_from_config(config):
+        config = store.write(config)
+    require_proxy_hostname_in_zone(config, payload)
     if any(proxy.hostname == payload.hostname for proxy in config.proxies):
         raise HTTPException(status_code=409, detail="Hostname already exists")
     config.proxies.append(payload)
@@ -135,6 +209,9 @@ async def create_proxy(payload: ProxyRule, background_tasks: BackgroundTasks) ->
 @app.put("/api/proxies/{proxy_id}")
 async def update_proxy(proxy_id: str, payload: ProxyRule, background_tasks: BackgroundTasks) -> dict:
     config = store.read(decrypt=True)
+    if not config.cloudflare.zone_name and await sync_cloudflare_zone_from_config(config):
+        config = store.write(config)
+    require_proxy_hostname_in_zone(config, payload)
     for index, proxy in enumerate(config.proxies):
         if proxy.id == proxy_id:
             payload.id = proxy_id
@@ -191,19 +268,29 @@ async def test_cloudflare(payload: dict | None = None) -> dict:
 @app.post("/api/cloudflare/login")
 async def cloudflare_login() -> dict:
     try:
-        return await start_cloudflared_login()
+        result = await start_cloudflared_login()
     except ExternalServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result["state"] == "ok":
+        config = store.read(decrypt=True)
+        await sync_cloudflare_zone_from_login(config)
+        config.cloudflare.enabled = True
+        saved = store.write(config)
+        result["cloudflare"] = saved.public_dict()["cloudflare"]
+    return result
 
 
 @app.get("/api/cloudflare/login/status")
 async def cloudflare_login_status() -> dict:
     status = get_cloudflared_login_status()
+    config = store.read(decrypt=True)
     if status["state"] == "ok":
-        config = store.read(decrypt=True)
-        if not config.cloudflare.enabled:
+        zone_changed = await sync_cloudflare_zone_from_login(config)
+        if not config.cloudflare.enabled or zone_changed:
             config.cloudflare.enabled = True
             store.write(config)
+            config = store.read(decrypt=True)
+    status["cloudflare"] = config.public_dict()["cloudflare"]
     return status
 
 
@@ -214,6 +301,10 @@ async def cloudflare_logout(background_tasks: BackgroundTasks) -> dict:
     config.cloudflare.enabled = False
     config.cloudflare.tunnel_id = ""
     config.cloudflare.credentials_file = ""
+    config.cloudflare.zone_id = ""
+    config.cloudflare.zone_name = ""
+    config.cloudflare.account_id = ""
+    config.cloudflare.api_token = ""
     saved = store.write(config)
     schedule_sync(background_tasks)
     return {

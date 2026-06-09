@@ -167,6 +167,12 @@ function Cloudflare({
             <StatusPill status={{ state: config.cloudflare.enabled ? "ok" : "warning" }} label={config.cloudflare.enabled ? t.enabled : t.disabled} t={t} />
           </div>
         </SettingRow>
+        <SettingRow title={t.selectedZone} detail={t.selectedZoneHint}>
+          <div className="status-detail">
+            <StatusPill status={{ state: config.cloudflare.zone_name ? "ok" : "warning" }} label={config.cloudflare.zone_name ? t.configured : t.notConfigured} t={t} />
+            <span>{config.cloudflare.zone_name || t.noZoneSelected}</span>
+          </div>
+        </SettingRow>
         {isLoggedIn && (
           <SettingRow title={t.tunnelName} detail={t.tunnelNameHint}>
             <div className="cloudflare-flow">

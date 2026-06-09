@@ -11,6 +11,8 @@ export const emptyConfig = {
     tunnel_id: "",
     credentials_file: "",
     zone_id: "",
+    zone_name: "",
+    account_id: "",
     api_token: "",
     proxy_enabled: false,
     proxy_url: "",

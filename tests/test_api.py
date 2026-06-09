@@ -7,6 +7,7 @@ def test_api_config_and_proxy_crud(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOLA_APP_DATA", str(tmp_path))
     monkeypatch.setenv("HOLA_CONFIG_PATH", str(tmp_path / "hola.yaml"))
     monkeypatch.setenv("HOLA_CADDY_CONFIG_DIR", str(tmp_path / "caddy"))
+    monkeypatch.setenv("HOLA_CLOUDFLARED_DATA", str(tmp_path / "cloudflared"))
 
     import hola.main as main
     from hola.config_store import ConfigStore
@@ -52,6 +53,7 @@ def test_api_reads_allowed_service_logs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("HOLA_APP_DATA", str(tmp_path))
     monkeypatch.setenv("HOLA_CONFIG_PATH", str(tmp_path / "hola.yaml"))
     monkeypatch.setenv("HOLA_CADDY_CONFIG_DIR", str(tmp_path / "caddy"))
+    monkeypatch.setenv("HOLA_CLOUDFLARED_DATA", str(tmp_path / "cloudflared"))
 
     import hola.main as main
     from hola.config_store import ConfigStore
@@ -81,6 +83,7 @@ def test_api_creates_cloudflare_tunnel_and_saves_metadata(tmp_path: Path, monkey
     monkeypatch.setenv("HOLA_APP_DATA", str(tmp_path))
     monkeypatch.setenv("HOLA_CONFIG_PATH", str(tmp_path / "hola.yaml"))
     monkeypatch.setenv("HOLA_CADDY_CONFIG_DIR", str(tmp_path / "caddy"))
+    monkeypatch.setenv("HOLA_CLOUDFLARED_DATA", str(tmp_path / "cloudflared"))
 
     import hola.main as main
     from hola.config_store import ConfigStore
@@ -169,3 +172,86 @@ def test_cloudflare_login_status_forces_cloudflare_enabled(tmp_path: Path, monke
     assert response.status_code == 200
     assert response.json()["state"] == "ok"
     assert main.store.read(decrypt=True).cloudflare.enabled is True
+
+
+def test_cloudflare_login_status_saves_selected_zone(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOLA_APP_DATA", str(tmp_path))
+    monkeypatch.setenv("HOLA_CONFIG_PATH", str(tmp_path / "hola.yaml"))
+    monkeypatch.setenv("HOLA_CADDY_CONFIG_DIR", str(tmp_path / "caddy"))
+    monkeypatch.setenv("HOLA_CLOUDFLARED_DATA", str(tmp_path / "cloudflared"))
+
+    import hola.main as main
+    from hola.config_store import ConfigStore
+    from hola.sync import SyncManager
+
+    def fake_get_cloudflared_login_status() -> dict:
+        return {
+            "state": "ok",
+            "message": "Cloudflare login certificate is available.",
+            "login_running": False,
+        }
+
+    def fake_read_cloudflared_origin_cert() -> dict[str, str]:
+        return {
+            "zone_id": "zone-1",
+            "account_id": "account-1",
+            "api_token": "token-1",
+        }
+
+    async def fake_get_cloudflare_zone(zone_id: str, api_token: str) -> dict:
+        assert (zone_id, api_token) == ("zone-1", "token-1")
+        return {
+            "zone_id": "zone-1",
+            "zone_name": "example.com",
+            "account_id": "account-1",
+        }
+
+    main.store = ConfigStore.from_env()
+    main.sync_manager = SyncManager(main.store)
+    monkeypatch.setattr(main, "get_cloudflared_login_status", fake_get_cloudflared_login_status)
+    monkeypatch.setattr(main, "read_cloudflared_origin_cert", fake_read_cloudflared_origin_cert)
+    monkeypatch.setattr(main, "get_cloudflare_zone", fake_get_cloudflare_zone)
+
+    with TestClient(main.app) as client:
+        response = client.get("/api/cloudflare/login/status")
+
+    assert response.status_code == 200
+    cloudflare = response.json()["cloudflare"]
+    assert cloudflare["zone_id"] == "zone-1"
+    assert cloudflare["zone_name"] == "example.com"
+    assert cloudflare["account_id"] == "account-1"
+    saved = main.store.read(decrypt=True).cloudflare
+    assert saved.zone_name == "example.com"
+    assert saved.api_token == "token-1"
+
+
+def test_api_rejects_proxy_outside_selected_zone(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOLA_APP_DATA", str(tmp_path))
+    monkeypatch.setenv("HOLA_CONFIG_PATH", str(tmp_path / "hola.yaml"))
+    monkeypatch.setenv("HOLA_CADDY_CONFIG_DIR", str(tmp_path / "caddy"))
+    monkeypatch.setenv("HOLA_CLOUDFLARED_DATA", str(tmp_path / "cloudflared"))
+
+    import hola.main as main
+    from hola.config_store import ConfigStore
+    from hola.sync import SyncManager
+
+    main.store = ConfigStore.from_env()
+    main.sync_manager = SyncManager(main.store)
+
+    config = main.store.read(decrypt=True)
+    config.cloudflare.zone_name = "example.com"
+    main.store.write(config)
+
+    with TestClient(main.app) as client:
+        response = client.post(
+            "/api/proxies",
+            json={
+                "hostname": "nas.other.com",
+                "upstream_url": "http://192.168.1.20:5000",
+                "enabled": True,
+                "note": "NAS",
+            },
+        )
+
+    assert response.status_code == 422
+    assert "example.com" in response.json()["detail"]

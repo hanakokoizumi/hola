@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import os
 import re
@@ -244,6 +245,47 @@ async def create_cloudflared_tunnel(tunnel_name: str) -> dict[str, str]:
         "tunnel_name": name,
         "tunnel_id": tunnel_id,
         "credentials_file": credentials_file,
+    }
+
+
+def read_cloudflared_origin_cert() -> dict[str, str]:
+    origin_cert = cloudflared_origin_cert_path()
+    if not origin_cert.exists():
+        raise ExternalServiceError("Cloudflare login is not complete. Run cloudflared tunnel login first.")
+    content = origin_cert.read_text(encoding="utf-8", errors="replace")
+    payload = "".join(line.strip() for line in content.splitlines() if "ARGO TUNNEL TOKEN" not in line)
+    if not payload:
+        raise ExternalServiceError("Cloudflare login certificate does not contain tunnel metadata.")
+    try:
+        data = json.loads(base64.b64decode(payload).decode("utf-8"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise ExternalServiceError("Cloudflare login certificate metadata could not be decoded.") from exc
+    return {
+        "zone_id": str(data.get("zoneID") or data.get("zone_id") or "").strip(),
+        "account_id": str(data.get("accountID") or data.get("account_id") or "").strip(),
+        "api_token": str(data.get("apiToken") or data.get("api_token") or "").strip(),
+    }
+
+
+async def get_cloudflare_zone(zone_id: str, api_token: str) -> dict[str, Any]:
+    zone = zone_id.strip()
+    token = api_token.strip()
+    if not zone:
+        raise ExternalServiceError("Cloudflare Zone ID is required")
+    if not token:
+        raise ExternalServiceError("Cloudflare API token is required")
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(base_url="https://api.cloudflare.com/client/v4", timeout=20, headers=headers) as client:
+        response = await client.get(f"/zones/{zone}")
+    raise_for_cloudflare_api_error(response)
+    result = response.json().get("result") or {}
+    return {
+        "zone_id": str(result.get("id") or zone).strip(),
+        "zone_name": str(result.get("name") or "").strip().lower().rstrip("."),
+        "zone_status": str(result.get("status") or "").strip(),
+        "account_id": str((result.get("account") or {}).get("id") or "").strip(),
+        "account_name": str((result.get("account") or {}).get("name") or "").strip(),
+        "permissions": result.get("permissions") or [],
     }
 
 

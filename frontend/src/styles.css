@@ -263,6 +263,32 @@ h2 {
   padding: 18px;
 }
 
+.panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.zone-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid #d8dde4;
+  border-radius: 6px;
+  padding: 0 10px;
+  color: #4f38e8;
+  background: #f8f7ff;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.zone-chip span {
+  overflow-wrap: anywhere;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -279,6 +305,18 @@ h2 {
   min-width: 0;
   color: #5a626d;
   font-size: 13px;
+  font-weight: 700;
+}
+
+.field-stack {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field-error {
+  color: #d72657;
+  font-size: 12px;
   font-weight: 700;
 }
 

@@ -57,6 +57,15 @@ function App() {
   const refreshCloudflareLoginStatus = async () => {
     const status = await api("/api/cloudflare/login/status");
     setCloudflareLoginStatus(status);
+    if (status.cloudflare) {
+      setConfig((current) => ({
+        ...current,
+        cloudflare: {
+          ...current.cloudflare,
+          ...status.cloudflare,
+        },
+      }));
+    }
     if (status.state === "ok") {
       enableCloudflareLocally();
     }
@@ -127,6 +136,15 @@ function App() {
     try {
       const result = await api("/api/cloudflare/login", { method: "POST" });
       setCloudflareLoginStatus(result);
+      if (result.cloudflare) {
+        setConfig((current) => ({
+          ...current,
+          cloudflare: {
+            ...current.cloudflare,
+            ...result.cloudflare,
+          },
+        }));
+      }
       if (result.state === "ok") {
         enableCloudflareLocally();
         setCloudflareLoginCompleteSignal((value) => value + 1);
@@ -192,6 +210,11 @@ function App() {
   };
 
   const createProxy = async () => {
+    const zoneName = config.cloudflare?.zone_name || "";
+    if (zoneName && !isHostnameInZone(proxyDraft.hostname, zoneName)) {
+      setToast(t.proxyZoneMismatch.replace("{zone}", zoneName));
+      return;
+    }
     setBusy(true);
     try {
       const proxy = await api("/api/proxies", { method: "POST", body: JSON.stringify(proxyDraft) });
@@ -328,3 +351,9 @@ function App() {
 }
 
 createRoot(document.getElementById("root")).render(<App />);
+
+function isHostnameInZone(hostname, zoneName) {
+  const host = hostname.trim().toLowerCase().replace(/\.$/, "");
+  const zone = zoneName.trim().toLowerCase().replace(/\.$/, "");
+  return Boolean(zone && (host === zone || host.endsWith(`.${zone}`)));
+}

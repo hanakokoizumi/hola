@@ -1,3 +1,5 @@
+import base64
+import json
 from pathlib import Path
 
 import httpx
@@ -10,6 +12,7 @@ from hola.clients import (
     delete_cloudflare_tunnel_dns,
     decode_docker_log_stream,
     get_cloudflared_login_status,
+    read_cloudflared_origin_cert,
     logout_cloudflared_login,
     route_cloudflared_dns,
     write_cloudflared_runtime,
@@ -103,6 +106,28 @@ def test_cloudflared_origin_cert_accepts_legacy_path(tmp_path: Path, monkeypatch
     status = get_cloudflared_login_status()
     assert status["state"] == "ok"
     assert "origin_cert" not in status
+
+
+def test_read_cloudflared_origin_cert_decodes_zone_metadata(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOLA_CLOUDFLARED_DATA", str(tmp_path))
+    cert_path = tmp_path / ".cloudflared" / "cert.pem"
+    cert_path.parent.mkdir()
+    metadata = {
+        "zoneID": "zone-1",
+        "accountID": "account-1",
+        "apiToken": "token-1",
+    }
+    encoded = base64.b64encode(json.dumps(metadata).encode("utf-8")).decode("ascii")
+    cert_path.write_text(
+        f"-----BEGIN ARGO TUNNEL TOKEN-----\n{encoded}\n-----END ARGO TUNNEL TOKEN-----\n",
+        encoding="utf-8",
+    )
+
+    assert read_cloudflared_origin_cert() == {
+        "zone_id": "zone-1",
+        "account_id": "account-1",
+        "api_token": "token-1",
+    }
 
 
 def test_cloudflared_logout_removes_login_certificates(tmp_path: Path, monkeypatch) -> None:

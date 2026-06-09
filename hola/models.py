@@ -39,9 +39,16 @@ class CloudflareConfig(BaseModel):
     tunnel_id: str = ""
     credentials_file: str = ""
     zone_id: str = ""
+    zone_name: str = ""
+    account_id: str = ""
     api_token: str = ""
     proxy_enabled: bool = False
     proxy_url: str = ""
+
+    @field_validator("zone_name")
+    @classmethod
+    def normalize_zone_name(cls, value: str) -> str:
+        return value.strip().lower().rstrip(".")
 
     @field_validator("proxy_url")
     @classmethod

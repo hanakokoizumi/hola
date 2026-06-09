@@ -49,6 +49,8 @@ class ConfigStore:
                 "tunnel_id": os.getenv("HOLA_CLOUDFLARE_TUNNEL_ID", ""),
                 "credentials_file": os.getenv("HOLA_CLOUDFLARE_CREDENTIALS_FILE", ""),
                 "zone_id": os.getenv("HOLA_CLOUDFLARE_ZONE_ID", ""),
+                "zone_name": os.getenv("HOLA_CLOUDFLARE_ZONE_NAME", ""),
+                "account_id": os.getenv("HOLA_CLOUDFLARE_ACCOUNT_ID", ""),
                 "api_token": os.getenv("HOLA_CLOUDFLARE_API_TOKEN", ""),
             },
         }
