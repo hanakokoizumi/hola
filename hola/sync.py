@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
@@ -11,6 +12,8 @@ from .clients import (
     delete_cloudflare_tunnel_dns,
     restart_container,
     route_cloudflared_dns,
+    wait_for_cloudflared_connection,
+    wait_for_tls_certificates,
     write_cloudflared_runtime,
 )
 from .config_store import ConfigStore
@@ -21,6 +24,12 @@ from .models import HolaConfig, ProxyRule, SyncStatus, TargetState, TargetStatus
 class SyncManager:
     store: ConfigStore
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    background_task: asyncio.Task | None = None
+
+    def request_reconcile_until_stable(self) -> None:
+        if self.background_task and not self.background_task.done():
+            return
+        self.background_task = asyncio.create_task(self.reconcile_until_stable())
 
     async def reconcile(self) -> SyncStatus:
         async with self.lock:
@@ -43,6 +52,15 @@ class SyncManager:
             self._set_overall_status(fresh)
             self.store.write(fresh)
             return fresh.status
+
+    async def reconcile_until_stable(self, max_attempts: int = 60, interval: int = 5) -> SyncStatus:
+        status = await self.reconcile()
+        for _ in range(max(0, max_attempts - 1)):
+            if not self._should_retry(status):
+                break
+            await asyncio.sleep(interval)
+            status = await self.reconcile()
+        return status
 
     async def remove_proxy(self, proxy: ProxyRule) -> SyncStatus:
         async with self.lock:
@@ -71,10 +89,18 @@ class SyncManager:
         ]
         if TargetState.error in states:
             config.status.overall = TargetStatus(state=TargetState.error, message="One or more targets failed")
+        elif TargetState.syncing in states:
+            config.status.overall = TargetStatus(state=TargetState.syncing, message="Sync still in progress")
         elif TargetState.warning in states:
             config.status.overall = TargetStatus(state=TargetState.warning, message="Synced with warnings")
         else:
             config.status.overall = TargetStatus(state=TargetState.ok, message="All targets are in sync")
+
+    def _should_retry(self, status: SyncStatus) -> bool:
+        return any(
+            target.state in {TargetState.syncing, TargetState.error}
+            for target in [status.cloudflare, status.caddy, status.adguard]
+        )
 
     async def _run_target(
         self,
@@ -120,14 +146,14 @@ class SyncManager:
             self._publish_target(config, "cloudflare", TargetState.syncing, "Writing Cloudflare Tunnel ingress to Caddy")
             write_cloudflared_runtime(cf.tunnel_id, cf.credentials_file, cf.proxy_enabled, cf.proxy_url, enabled_hostnames)
             self._publish_target(config, "cloudflare", TargetState.syncing, "Starting Cloudflare Tunnel")
+            restart_started = int(time.time())
             await restart_container("cloudflare")
             self._publish_target(config, "cloudflare", TargetState.syncing, "Waiting for Cloudflare Tunnel to become active")
-            await asyncio.sleep(3)
-            state, message = await check_cloudflared_connection()
+            state, message = await wait_for_cloudflared_connection(since=restart_started)
             if state == "error":
                 raise RuntimeError(message)
             if state == "warning":
-                self._set_target(config, "cloudflare", TargetState.warning, message)
+                self._set_target(config, "cloudflare", TargetState.syncing, message)
                 return ""
             return f"{message}; DNS routes synced for {routed} hostname(s)"
 
@@ -167,10 +193,18 @@ class SyncManager:
             if not config.caddy.admin_url:
                 self._set_target(config, "caddy", TargetState.warning, "Caddy Admin API URL missing")
                 return ""
+            if config.cloudflare.enabled and config.cloudflare.tunnel_id and config.status.cloudflare.state != TargetState.ok:
+                self._set_target(config, "caddy", TargetState.syncing, "Waiting for Cloudflare Tunnel before requesting SSL certificates")
+                return ""
             self._publish_target(config, "caddy", TargetState.syncing, "Loading Caddy reverse proxy configuration")
             await CaddyClient(config.caddy.admin_url).load_config(config)
-            if config.caddy.http01_enabled and config.proxies:
+            enabled_hostnames = [proxy.hostname for proxy in config.proxies if proxy.enabled]
+            if config.caddy.http01_enabled and enabled_hostnames:
                 self._publish_target(config, "caddy", TargetState.syncing, "Waiting for SSL certificates")
+                ready, message = await wait_for_tls_certificates(enabled_hostnames)
+                if not ready:
+                    self._set_target(config, "caddy", TargetState.syncing, f"Waiting for SSL certificates: {message}")
+                    return ""
             return "Caddy reverse proxy config loaded"
 
         if config.caddy.admin_url:

@@ -7,6 +7,8 @@ import os
 import re
 import shlex
 import signal
+import ssl
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -88,7 +90,7 @@ def cloudflared_config_path() -> Path:
     return cloudflared_data_dir() / "config.yml"
 
 
-async def get_container_logs(service: str, tail: int = 200) -> str:
+async def get_container_logs(service: str, tail: int = 200, since: int | None = None) -> str:
     container = LOG_CONTAINERS.get(service)
     if not container:
         raise ExternalServiceError(f"Unknown log service: {service}")
@@ -99,6 +101,8 @@ async def get_container_logs(service: str, tail: int = 200) -> str:
         "timestamps": "1",
         "tail": str(bounded_tail),
     }
+    if since is not None:
+        params["since"] = str(since)
     response = await docker_get(f"/containers/{quote(container, safe='')}/logs", params=params)
     if response.status_code == 404:
         raise ExternalServiceError(f"Container not found: {container}")
@@ -464,12 +468,12 @@ def terminate_process(process: asyncio.subprocess.Process) -> None:
         return
 
 
-async def check_cloudflared_connection() -> tuple[str, str]:
+async def check_cloudflared_connection(since: int | None = None) -> tuple[str, str]:
     state = await get_container_state("cloudflare")
     if not state["running"]:
         return "error", f"cloudflared container is not running ({state['status']})"
 
-    logs = await get_container_logs("cloudflare", 250)
+    logs = await get_container_logs("cloudflare", 250, since=since)
     lines = [line for line in logs.splitlines() if line.strip()]
     if any(marker in logs for marker in CLOUDFLARED_CONNECTED_MARKERS):
         return "ok", "Cloudflare Tunnel connected"
@@ -482,6 +486,60 @@ async def check_cloudflared_connection() -> tuple[str, str]:
     if latest_error:
         return "error", f"Cloudflare Tunnel is not connected: {simplify_log_line(latest_error)}"
     return "warning", "Cloudflare Tunnel runtime initialized; waiting for connector"
+
+
+async def wait_for_cloudflared_connection(timeout: int = 45, interval: int = 3, since: int | None = None) -> tuple[str, str]:
+    deadline = time.monotonic() + timeout
+    latest_state = "warning"
+    latest_message = "Cloudflare Tunnel runtime initialized; waiting for connector"
+    while True:
+        latest_state, latest_message = await check_cloudflared_connection(since=since)
+        if latest_state in {"ok", "error"}:
+            return latest_state, latest_message
+        if time.monotonic() >= deadline:
+            return latest_state, latest_message
+        await asyncio.sleep(interval)
+
+
+async def wait_for_tls_certificates(
+    hostnames: list[str],
+    connect_host: str = "caddy",
+    port: int = 443,
+    timeout: int = 45,
+    interval: int = 5,
+) -> tuple[bool, str]:
+    pending = sorted({hostname.strip().lower().rstrip(".") for hostname in hostnames if hostname.strip()})
+    if not pending:
+        return True, "No SSL certificates required"
+    deadline = time.monotonic() + timeout
+    latest_error = ""
+    while True:
+        still_pending: list[str] = []
+        for hostname in pending:
+            try:
+                await check_tls_certificate(hostname, connect_host, port)
+            except ExternalServiceError as exc:
+                latest_error = str(exc)
+                still_pending.append(hostname)
+        if not still_pending:
+            return True, f"SSL certificates are ready for {len(pending)} hostname(s)"
+        if time.monotonic() >= deadline:
+            return False, latest_error or f"Waiting for SSL certificates for {', '.join(still_pending)}"
+        pending = still_pending
+        await asyncio.sleep(interval)
+
+
+async def check_tls_certificate(hostname: str, connect_host: str = "caddy", port: int = 443) -> None:
+    context = ssl.create_default_context()
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection(connect_host, port, ssl=context, server_hostname=hostname),
+            timeout=10,
+        )
+    except (OSError, ssl.SSLError, asyncio.TimeoutError) as exc:
+        raise ExternalServiceError(f"{hostname}: {exc}") from exc
+    writer.close()
+    await writer.wait_closed()
 
 
 def simplify_log_line(line: str) -> str:

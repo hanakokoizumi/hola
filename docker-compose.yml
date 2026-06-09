@@ -19,6 +19,9 @@ services:
       - ./data/cloudflared:/etc/cloudflared
       - ./data/caddy/config:/caddy-config
       - /var/run/docker.sock:/var/run/docker.sock
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     depends_on:
       - caddy
 
@@ -43,6 +46,9 @@ services:
     restart: unless-stopped
     volumes:
       - ./data/cloudflared:/etc/cloudflared
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     depends_on:
       - hola
       - caddy

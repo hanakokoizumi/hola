@@ -82,8 +82,12 @@ class TunnelCreatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=128)
 
 
+async def run_sync_background() -> None:
+    sync_manager.request_reconcile_until_stable()
+
+
 def schedule_sync(background_tasks: BackgroundTasks) -> None:
-    background_tasks.add_task(sync_manager.reconcile)
+    background_tasks.add_task(run_sync_background)
 
 
 def hostname_in_zone(hostname: str, zone_name: str) -> bool:

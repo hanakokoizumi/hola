@@ -32,6 +32,7 @@ export function translateStatusMessage(message, t) {
   if (message === "Writing Cloudflare Tunnel ingress to Caddy") return t.cloudflareWritingIngress;
   if (message === "Starting Cloudflare Tunnel") return t.cloudflareStartingTunnel;
   if (message === "Waiting for Cloudflare Tunnel to become active") return t.cloudflareWaitingTunnel;
+  if (message === "Cloudflare Tunnel runtime initialized; waiting for connector") return t.cloudflareWaitingConnector;
   if (message === "Deleting removed Cloudflare DNS route") return t.cloudflareDeletingDns;
   if (message.startsWith("Deleted ") && message.includes(" Cloudflare DNS record")) return t.cloudflareDeletedDns;
   if (message.startsWith("Cloudflare DNS cleanup failed:")) return `${t.cloudflareDnsCleanupFailed} ${message.replace("Cloudflare DNS cleanup failed:", "").trim()}`;
@@ -41,6 +42,8 @@ export function translateStatusMessage(message, t) {
   if (message === "Caddy local LAN IP missing") return t.caddyLocalIpMissingDetail;
   if (message === "Loading Caddy reverse proxy configuration") return t.caddyLoading;
   if (message === "Waiting for SSL certificates") return t.caddyWaitingSsl;
+  if (message === "Waiting for Cloudflare Tunnel before requesting SSL certificates") return t.caddyWaitingTunnelBeforeSsl;
+  if (message.startsWith("Waiting for SSL certificates:")) return `${t.caddyWaitingSsl} ${message.replace("Waiting for SSL certificates:", "").trim()}`;
   if (message === "AdGuard Home sync disabled") return t.adguardDisabled;
   if (message === "AdGuard Home configuration incomplete") return t.adguardIncomplete;
   if (message === "Checking AdGuard Home authentication") return t.adguardCheckingAuth;
@@ -51,5 +54,6 @@ export function translateStatusMessage(message, t) {
   if (message === "All targets are in sync") return t.allSynced;
   if (message === "Synced with warnings") return t.syncedWarnings;
   if (message === "One or more targets failed") return t.syncFailed;
+  if (message === "Sync still in progress") return t.syncInProgress;
   return message;
 }

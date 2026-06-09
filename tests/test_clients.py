@@ -110,7 +110,8 @@ async def test_cloudflare_sync_routes_enabled_proxy_hostnames(tmp_path, monkeypa
     async def fake_restart_container(service: str) -> None:
         assert service == "cloudflare"
 
-    async def fake_check_cloudflared_connection() -> tuple[str, str]:
+    async def fake_wait_for_cloudflared_connection(timeout: int = 45, interval: int = 3, since: int | None = None) -> tuple[str, str]:
+        assert since is not None
         return "ok", "Cloudflare Tunnel connected"
 
     def fake_write_cloudflared_runtime(tunnel_id: str, credentials_file: str, proxy_enabled: bool, proxy_url: str, hostnames: list[str]) -> None:
@@ -124,10 +125,14 @@ async def test_cloudflare_sync_routes_enabled_proxy_hostnames(tmp_path, monkeypa
             }
         )
 
+    async def fake_wait_for_tls_certificates(hostnames: list[str], connect_host: str = "caddy", port: int = 443, timeout: int = 45, interval: int = 5) -> tuple[bool, str]:
+        return True, f"SSL certificates are ready for {len(hostnames)} hostname(s)"
+
     monkeypatch.setattr(sync_module, "route_cloudflared_dns", fake_route_cloudflared_dns)
     monkeypatch.setattr(sync_module, "restart_container", fake_restart_container)
-    monkeypatch.setattr(sync_module, "check_cloudflared_connection", fake_check_cloudflared_connection)
+    monkeypatch.setattr(sync_module, "wait_for_cloudflared_connection", fake_wait_for_cloudflared_connection)
     monkeypatch.setattr(sync_module, "write_cloudflared_runtime", fake_write_cloudflared_runtime)
+    monkeypatch.setattr(sync_module, "wait_for_tls_certificates", fake_wait_for_tls_certificates)
 
     status = await SyncManager(store).reconcile()
 
@@ -181,6 +186,58 @@ async def test_adguard_sync_uses_caddy_lan_ip_for_rewrites(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_caddy_waits_for_cloudflare_before_requesting_certificates(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HOLA_APP_DATA", str(tmp_path))
+    monkeypatch.setenv("HOLA_CONFIG_PATH", str(tmp_path / "hola.yaml"))
+    store = ConfigStore.from_env()
+    config = store.read(decrypt=True)
+    config.cloudflare.enabled = True
+    config.cloudflare.tunnel_id = "11111111-1111-1111-1111-111111111111"
+    config.cloudflare.credentials_file = "/etc/cloudflared/credentials-hola.json"
+    config.caddy.admin_url = "http://caddy.test"
+    config.adguard.enabled = False
+    config.proxies = [
+        ProxyRule(hostname="notes.example.com", upstream_url="http://192.168.1.20:5000"),
+    ]
+    store.write(config)
+    loaded = False
+
+    async def fake_route_cloudflared_dns(tunnel_id: str, hostname: str, overwrite: bool = True) -> None:
+        return None
+
+    async def fake_restart_container(service: str) -> None:
+        return None
+
+    async def fake_wait_for_cloudflared_connection(timeout: int = 45, interval: int = 3, since: int | None = None) -> tuple[str, str]:
+        return "warning", "Cloudflare Tunnel runtime initialized; waiting for connector"
+
+    def fake_write_cloudflared_runtime(tunnel_id: str, credentials_file: str, proxy_enabled: bool, proxy_url: str, hostnames: list[str]) -> None:
+        return None
+
+    class FakeCaddyClient:
+        def __init__(self, admin_url: str) -> None:
+            return None
+
+        async def load_config(self, config: HolaConfig) -> None:
+            nonlocal loaded
+            loaded = True
+
+    monkeypatch.setattr(sync_module, "route_cloudflared_dns", fake_route_cloudflared_dns)
+    monkeypatch.setattr(sync_module, "restart_container", fake_restart_container)
+    monkeypatch.setattr(sync_module, "wait_for_cloudflared_connection", fake_wait_for_cloudflared_connection)
+    monkeypatch.setattr(sync_module, "write_cloudflared_runtime", fake_write_cloudflared_runtime)
+    monkeypatch.setattr(sync_module, "CaddyClient", FakeCaddyClient)
+
+    status = await SyncManager(store).reconcile()
+
+    assert status.cloudflare.state == "syncing"
+    assert status.caddy.state == "syncing"
+    assert status.overall.state == "syncing"
+    assert status.caddy.message == "Waiting for Cloudflare Tunnel before requesting SSL certificates"
+    assert loaded is False
+
+
+@pytest.mark.asyncio
 async def test_remove_proxy_cleans_external_dns_and_rewrites(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("HOLA_APP_DATA", str(tmp_path))
     monkeypatch.setenv("HOLA_CONFIG_PATH", str(tmp_path / "hola.yaml"))
@@ -214,11 +271,14 @@ async def test_remove_proxy_cleans_external_dns_and_rewrites(tmp_path, monkeypat
     async def fake_restart_container(service: str) -> None:
         return None
 
-    async def fake_check_cloudflared_connection() -> tuple[str, str]:
+    async def fake_wait_for_cloudflared_connection(timeout: int = 45, interval: int = 3, since: int | None = None) -> tuple[str, str]:
         return "ok", "Cloudflare Tunnel connected"
 
     def fake_write_cloudflared_runtime(tunnel_id: str, credentials_file: str, proxy_enabled: bool, proxy_url: str, hostnames: list[str]) -> None:
         runtime["hostnames"] = hostnames
+
+    async def fake_wait_for_tls_certificates(hostnames: list[str], connect_host: str = "caddy", port: int = 443, timeout: int = 45, interval: int = 5) -> tuple[bool, str]:
+        return True, f"SSL certificates are ready for {len(hostnames)} hostname(s)"
 
     class FakeAdGuardClient:
         def __init__(self, url: str, username: str, password: str) -> None:
@@ -236,8 +296,9 @@ async def test_remove_proxy_cleans_external_dns_and_rewrites(tmp_path, monkeypat
     monkeypatch.setattr(sync_module, "delete_cloudflare_tunnel_dns", fake_delete_cloudflare_tunnel_dns)
     monkeypatch.setattr(sync_module, "route_cloudflared_dns", fake_route_cloudflared_dns)
     monkeypatch.setattr(sync_module, "restart_container", fake_restart_container)
-    monkeypatch.setattr(sync_module, "check_cloudflared_connection", fake_check_cloudflared_connection)
+    monkeypatch.setattr(sync_module, "wait_for_cloudflared_connection", fake_wait_for_cloudflared_connection)
     monkeypatch.setattr(sync_module, "write_cloudflared_runtime", fake_write_cloudflared_runtime)
+    monkeypatch.setattr(sync_module, "wait_for_tls_certificates", fake_wait_for_tls_certificates)
     monkeypatch.setattr(sync_module, "AdGuardClient", FakeAdGuardClient)
 
     status = await SyncManager(store).remove_proxy(removed)
