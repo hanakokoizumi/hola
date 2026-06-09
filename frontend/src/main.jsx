@@ -6,6 +6,7 @@ import { emptyConfig } from "./lib/config.js";
 import { Shell } from "./components/layout.jsx";
 import { AuthPage } from "./views/auth.jsx";
 import { Proxies } from "./views/proxies.jsx";
+import { SetupWizard } from "./views/setup-wizard.jsx";
 import { SettingsView } from "./views/settings.jsx";
 import { Status } from "./views/status.jsx";
 import "./styles.css";
@@ -210,20 +211,24 @@ function App() {
   };
 
   const createProxy = async () => {
+    return createProxyFromDraft(proxyDraft, () => setProxyDraft({ hostname: "", upstream_url: "", enabled: true, note: "" }));
+  };
+
+  const createProxyFromDraft = async (draft, onCreated) => {
     const zoneName = config.cloudflare?.zone_name || "";
-    if (zoneName && !isHostnameInZone(proxyDraft.hostname, zoneName)) {
+    if (zoneName && !isHostnameInZone(draft.hostname, zoneName)) {
       setToast(t.proxyZoneMismatch.replace("{zone}", zoneName));
       return;
     }
     setBusy(true);
     try {
-      const proxy = await api("/api/proxies", { method: "POST", body: JSON.stringify(proxyDraft) });
+      const proxy = await api("/api/proxies", { method: "POST", body: JSON.stringify(draft) });
       setConfig((current) => ({
         ...current,
         proxies: [...current.proxies.filter((item) => item.id !== proxy.id), proxy],
       }));
       window.setTimeout(refreshStatus, 1000);
-      setProxyDraft({ hostname: "", upstream_url: "", enabled: true, note: "" });
+      onCreated?.(proxy);
       setToast(t.proxyCreated);
     } catch (error) {
       setToast(error.message);
@@ -262,7 +267,7 @@ function App() {
       setConfig(fresh);
       setAuthed(true);
       localStorage.setItem("hola.auth", "true");
-      setActive("proxies");
+      setActive("wizard");
       setToast(t.accountReady);
     } catch (error) {
       setToast(error.message);
@@ -319,6 +324,22 @@ function App() {
       saveConfig={saveConfig}
     >
       {toast && <div className="toast" onClick={() => setToast("")}>{toast}</div>}
+      {active === "wizard" && (
+        <SetupWizard
+          config={config}
+          t={t}
+          busy={busy}
+          patch={patch}
+          saveConfig={saveConfig}
+          runSync={runSync}
+          startCloudflareLogin={startCloudflareLogin}
+          createCloudflareTunnel={createCloudflareTunnel}
+          cloudflareLoginStatus={cloudflareLoginStatus}
+          draft={proxyDraft}
+          setDraft={setProxyDraft}
+          createProxy={createProxy}
+        />
+      )}
       {active === "proxies" && (
         <Proxies
           config={config}

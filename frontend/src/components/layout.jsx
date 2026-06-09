@@ -1,5 +1,5 @@
 import React from "react";
-import { Activity, Globe2, Settings } from "lucide-react";
+import { Activity, Globe2, ListChecks, Settings } from "lucide-react";
 import { LanguageSelect, StatusPill } from "./controls.jsx";
 
 export function FooterMeta({ config }) {
@@ -15,6 +15,7 @@ export function FooterMeta({ config }) {
 
 export function Shell({ config, t, active, setActive, lang, setLang, busy, runSync, saveConfig, children }) {
   const nav = [
+    ["wizard", ListChecks, t.setupWizard],
     ["proxies", Globe2, t.proxies],
     ["settings", Settings, t.settings],
     ["status", Activity, t.status],
@@ -42,7 +43,7 @@ export function Shell({ config, t, active, setActive, lang, setLang, busy, runSy
       <main>
         <header>
           <div>
-            <h1>{{ proxies: t.proxies, settings: t.settings, status: t.status }[active]}</h1>
+            <h1>{{ wizard: t.setupWizard, proxies: t.proxies, settings: t.settings, status: t.status }[active]}</h1>
           </div>
           <div className="actions">
             <LanguageSelect lang={lang} setLang={setLang} />
